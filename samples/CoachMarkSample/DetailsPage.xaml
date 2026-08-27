@@ -1,0 +1,18 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="CoachMarkSample.DetailsPage"
+             Title="Details Page">
+    <VerticalStackLayout Padding="24" Spacing="16" VerticalOptions="Center">
+        <Label Text="Navigated Successfully!"
+               FontSize="24"
+               FontAttributes="Bold"
+               HorizontalTextAlignment="Center" />
+        <Label Text="The coach mark tour on the previous page was safely and automatically dismissed when navigating away."
+               FontSize="14"
+               HorizontalTextAlignment="Center" />
+        <Button Text="Go Back"
+                Clicked="OnGoBackClicked"
+                HorizontalOptions="Center" />
+    </VerticalStackLayout>
+</ContentPage>

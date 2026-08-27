@@ -1,0 +1,11 @@
+<Solution>
+  <Folder Name="/samples/">
+    <Project Path="samples/CoachMarkSample/CoachMarkSample.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/Plugin.Maui.CoachMark/Plugin.Maui.CoachMark.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Plugin.Maui.CoachMark.Tests/Plugin.Maui.CoachMark.Tests.csproj" />
+  </Folder>
+</Solution>

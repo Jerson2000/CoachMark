@@ -1,0 +1,157 @@
+﻿<?xml version="1.0" encoding="utf-8" ?>
+<ContentPage xmlns="http://schemas.microsoft.com/dotnet/2021/maui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2009/xaml"
+             x:Class="CoachMarkSample.MainPage"
+             Title="CoachMark Showcase">
+
+    <Grid RowDefinitions="Auto, *">
+        <!-- Top Toolbar / Header -->
+        <Grid Grid.Row="0"
+              Padding="16,12"
+              BackgroundColor="#512BD4"
+              ColumnDefinitions="*, Auto, Auto">
+            <Label Text="🚀 MAUI Coach Mark"
+                   TextColor="White"
+                   FontAttributes="Bold"
+                   FontSize="18"
+                   VerticalOptions="Center" />
+            <Button x:Name="SettingsBtn"
+                    Grid.Column="1"
+                    Text="⚙"
+                    FontSize="18"
+                    TextColor="White"
+                    BackgroundColor="Transparent"
+                    WidthRequest="44"
+                    HeightRequest="44"
+                    Margin="0,0,4,0" />
+            <Button x:Name="ProfileBtn"
+                    Grid.Column="2"
+                    Text="👤"
+                    FontSize="18"
+                    TextColor="White"
+                    BackgroundColor="Transparent"
+                    WidthRequest="44"
+                    HeightRequest="44" />
+        </Grid>
+
+        <!-- Main Scrollable Content -->
+        <ScrollView Grid.Row="1" x:Name="MainScrollView">
+            <VerticalStackLayout Padding="20" Spacing="20">
+                <!-- SearchBar -->
+                <SearchBar x:Name="SearchBox"
+                           Placeholder="Search items, tours, docs..."
+                           HorizontalOptions="Fill" />
+
+                <!-- Action Controls Grid -->
+                <Grid ColumnDefinitions="*, *" ColumnSpacing="12" RowDefinitions="Auto, Auto" RowSpacing="12">
+                    <Button x:Name="StartTourBtn"
+                            Grid.Row="0"
+                            Grid.Column="0"
+                            Text="Start Full Tour"
+                            BackgroundColor="#512BD4"
+                            TextColor="White"
+                            FontAttributes="Bold"
+                            Clicked="OnStartTourClicked" />
+
+                    <Button x:Name="SingleMarkBtn"
+                            Grid.Row="0"
+                            Grid.Column="1"
+                            Text="Single Step"
+                            BackgroundColor="#0D9488"
+                            TextColor="White"
+                            Clicked="OnSingleMarkClicked" />
+
+                    <Button x:Name="CancelableTourBtn"
+                            Grid.Row="1"
+                            Grid.Column="0"
+                            Text="Cancelable (3s)"
+                            BackgroundColor="#EA580C"
+                            TextColor="White"
+                            Clicked="OnCancelableTourClicked" />
+
+                    <Button x:Name="NavAwayBtn"
+                            Grid.Row="1"
+                            Grid.Column="1"
+                            Text="Nav Away Demo"
+                            BackgroundColor="#4B5563"
+                            TextColor="White"
+                            Clicked="OnNavAwayClicked" />
+                </Grid>
+
+                <!-- Status Card -->
+                <Border StrokeShape="RoundRectangle 8"
+                        Stroke="#E5E7EB"
+                        BackgroundColor="#F9FAFB"
+                        Padding="16">
+                    <VerticalStackLayout Spacing="6">
+                        <Label Text="Tour Status / Diagnostics" FontAttributes="Bold" FontSize="14" />
+                        <Label x:Name="StatusLabel"
+                               Text="Ready. Click any button above to trigger a coach mark flow."
+                               FontSize="12"
+                               TextColor="#4B5563" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <!-- ScrollView Target Demo -->
+                <Border x:Name="DeepSectionBorder"
+                        StrokeShape="RoundRectangle 10"
+                        Stroke="#CBD5E1"
+                        Padding="16"
+                        BackgroundColor="White">
+                    <VerticalStackLayout Spacing="10">
+                        <Label Text="Deep Scroll Section" FontAttributes="Bold" FontSize="16" />
+                        <Label Text="This section requires auto-scrolling to bring into viewport during the tour."
+                               FontSize="13"
+                               TextColor="#64748B" />
+                        <Button x:Name="DeepActionButton"
+                                Text="Special Action"
+                                BackgroundColor="#7C3AED"
+                                TextColor="White"
+                                HorizontalOptions="Start" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <!-- Dynamic CollectionView -->
+                <Label Text="Interactive CollectionView Items" FontAttributes="Bold" FontSize="16" Margin="0,8,0,0" />
+                <CollectionView x:Name="ItemsCollectionView"
+                                HeightRequest="220"
+                                SelectionMode="None">
+                    <CollectionView.ItemTemplate>
+                        <DataTemplate>
+                            <Border StrokeShape="RoundRectangle 8"
+                                    Stroke="#E2E8F0"
+                                    Padding="12"
+                                    Margin="0,0,0,8"
+                                    BackgroundColor="#F8FAFC">
+                                <Grid ColumnDefinitions="Auto, *, Auto">
+                                    <Label Text="📦" FontSize="20" VerticalOptions="Center" Margin="0,0,12,0" />
+                                    <VerticalStackLayout Grid.Column="1" VerticalOptions="Center">
+                                        <Label Text="{Binding Name}" FontAttributes="Bold" FontSize="14" />
+                                        <Label Text="{Binding Description}" FontSize="12" TextColor="#64748B" />
+                                    </VerticalStackLayout>
+                                    <Button Grid.Column="2"
+                                            Text="Inspect"
+                                            FontSize="12"
+                                            Padding="10,4"
+                                            HeightRequest="32"
+                                            Clicked="OnInspectItemClicked" />
+                                </Grid>
+                            </Border>
+                        </DataTemplate>
+                    </CollectionView.ItemTemplate>
+                </CollectionView>
+
+                <!-- Bottom Floating Action Button Mock -->
+                <Button x:Name="CreateNewItemBtn"
+                        Text="+ Create New Item"
+                        HeightRequest="48"
+                        CornerRadius="24"
+                        BackgroundColor="#2563EB"
+                        TextColor="White"
+                        FontAttributes="Bold"
+                        HorizontalOptions="Fill" />
+            </VerticalStackLayout>
+        </ScrollView>
+    </Grid>
+
+</ContentPage>
