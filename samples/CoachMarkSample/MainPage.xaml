@@ -43,7 +43,7 @@
                            HorizontalOptions="Fill" />
 
                 <!-- Action Controls Grid -->
-                <Grid ColumnDefinitions="*, *" ColumnSpacing="12" RowDefinitions="Auto, Auto" RowSpacing="12">
+                <Grid ColumnDefinitions="*, *" ColumnSpacing="12" RowDefinitions="Auto, Auto, Auto" RowSpacing="12">
                     <Button x:Name="StartTourBtn"
                             Grid.Row="0"
                             Grid.Column="0"
@@ -76,6 +76,15 @@
                             BackgroundColor="#4B5563"
                             TextColor="White"
                             Clicked="OnNavAwayClicked" />
+
+                    <Button x:Name="ShellAndRectTourBtn"
+                            Grid.Row="2"
+                            Grid.ColumnSpan="2"
+                            Text="Shell &amp; Drawable Rect Tour"
+                            BackgroundColor="#4F46E5"
+                            TextColor="White"
+                            FontAttributes="Bold"
+                            Clicked="OnShellAndRectTourClicked" />
                 </Grid>
 
                 <!-- Status Card -->
@@ -89,6 +98,22 @@
                                Text="Ready. Click any button above to trigger a coach mark flow."
                                FontSize="12"
                                TextColor="#4B5563" />
+                    </VerticalStackLayout>
+                </Border>
+
+                <!-- Custom Drawable GraphicsView Demo -->
+                <Border StrokeShape="RoundRectangle 10"
+                        Stroke="#CBD5E1"
+                        Padding="16"
+                        BackgroundColor="White">
+                    <VerticalStackLayout Spacing="10">
+                        <Label Text="GraphicsView Custom Rect Targets" FontAttributes="Bold" FontSize="16" />
+                        <Label Text="Draws custom canvas regions whose Rect bounds are targeted directly by CoachMarkStep."
+                               FontSize="13"
+                               TextColor="#64748B" />
+                        <GraphicsView x:Name="DemoGraphicsView"
+                                      HeightRequest="140"
+                                      HorizontalOptions="Fill" />
                     </VerticalStackLayout>
                 </Border>
 

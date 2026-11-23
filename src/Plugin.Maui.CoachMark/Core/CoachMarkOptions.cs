@@ -66,6 +66,12 @@ public sealed class CoachMarkOptions
     public CoachMarkPlacement PreferredPlacement { get; init; } = CoachMarkPlacement.Auto;
 
     /// <summary>
+    /// Controls whether the overlay is hosted inside the active ContentPage or at the platform Window root.
+    /// Default is Auto (uses Window hosting when any step targets a Shell element, otherwise Page hosting).
+    /// </summary>
+    public CoachMarkOverlayHostMode OverlayHostMode { get; init; } = CoachMarkOverlayHostMode.Auto;
+
+    /// <summary>
     /// Gets or sets whether touches on the highlighted spotlight target pass through to the underlying control. Default is false.
     /// </summary>
     public bool AllowTargetInteraction { get; init; } = false;

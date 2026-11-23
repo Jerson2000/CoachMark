@@ -17,6 +17,9 @@ public sealed class CoachMarkOverlayView : Grid
     private CoachMarkOptions? _currentOptions;
     private Rect _currentSpotlightRect;
 
+    internal Size? HostViewportSize { get; set; }
+    internal Rect CurrentTooltipBounds { get; private set; }
+
     public event EventHandler? OutsideTapped;
     public event EventHandler? SpotlightTapped;
     public event EventHandler? PreviousRequested;
@@ -108,16 +111,18 @@ public sealed class CoachMarkOverlayView : Grid
         // Bind tooltip content
         BindTooltipContent(step, currentStepIndex, totalSteps, options);
 
-        // Measure tooltip size
-        double maxContainerWidth = Math.Max(100, Width - options.SafePadding.HorizontalThickness);
-        var measuredTooltipSize = _tooltipHost.Measure(maxContainerWidth, double.PositiveInfinity);
-        if (measuredTooltipSize.Width <= 0 || double.IsInfinity(measuredTooltipSize.Width))
+        // Ensure overlay bounds are valid when hosted at the platform Window root
+        var containerBounds = GetContainerBounds();
+        if (containerBounds.Width > 0 && containerBounds.Height > 0 && (Width <= 0 || Height <= 0))
         {
-            measuredTooltipSize = new Size(Math.Min(320, maxContainerWidth), 180);
+            ((IView)this).Measure(containerBounds.Width, containerBounds.Height);
+            ((IView)this).Arrange(containerBounds);
         }
 
+        // Measure tooltip size
+        var measuredTooltipSize = MeasureTooltip(containerBounds.Width, options);
+
         // Calculate placement
-        var containerBounds = new Rect(0, 0, Width, Height);
         var preferredPlacement = step.Placement ?? options.PreferredPlacement;
         var placement = placementEngine.CalculatePlacement(
             paddedTargetBounds,
@@ -164,8 +169,10 @@ public sealed class CoachMarkOverlayView : Grid
         _drawable.SpotlightRect = new RectF((float)paddedTargetBounds.X, (float)paddedTargetBounds.Y, (float)paddedTargetBounds.Width, (float)paddedTargetBounds.Height);
         _graphicsView.Invalidate();
 
-        var containerBounds = new Rect(0, 0, Width, Height);
-        var measuredTooltipSize = new Size(_tooltipHost.Width > 0 ? _tooltipHost.Width : 300, _tooltipHost.Height > 0 ? _tooltipHost.Height : 150);
+        var containerBounds = GetContainerBounds();
+        var measuredTooltipSize = (_tooltipHost.Width > 0 && _tooltipHost.Height > 0)
+            ? new Size(_tooltipHost.Width, _tooltipHost.Height)
+            : MeasureTooltip(containerBounds.Width, options);
         var preferredPlacement = _currentStep.Placement ?? options.PreferredPlacement;
 
         var placement = placementEngine.CalculatePlacement(
@@ -177,6 +184,30 @@ public sealed class CoachMarkOverlayView : Grid
             preferredPlacement);
 
         PositionTooltip(placement.TooltipBounds);
+    }
+
+    internal Rect GetContainerBounds()
+    {
+        double w = Width > 0 ? Width : (HostViewportSize?.Width ?? 0);
+        double h = Height > 0 ? Height : (HostViewportSize?.Height ?? 0);
+        return new Rect(0, 0, Math.Max(0, w), Math.Max(0, h));
+    }
+
+    private Size MeasureTooltip(double containerWidth, CoachMarkOptions options)
+    {
+        double effectiveContainerWidth = containerWidth > 0 ? containerWidth : 360;
+        double maxAvailableWidth = Math.Max(100, effectiveContainerWidth - options.SafePadding.HorizontalThickness);
+        double maxTooltipWidth = Math.Min(360, maxAvailableWidth);
+
+        var measured = _tooltipHost.Measure(maxTooltipWidth, double.PositiveInfinity);
+        double w = (measured.Width > 0 && double.IsFinite(measured.Width))
+            ? Math.Min(measured.Width, maxAvailableWidth)
+            : Math.Min(320, maxTooltipWidth);
+        double h = (measured.Height > 0 && double.IsFinite(measured.Height))
+            ? measured.Height
+            : 180;
+
+        return new Size(w, h);
     }
 
     private void BindTooltipContent(
@@ -204,8 +235,17 @@ public sealed class CoachMarkOverlayView : Grid
 
     private void PositionTooltip(Rect bounds)
     {
+        CurrentTooltipBounds = bounds;
         AbsoluteLayout.SetLayoutBounds(_tooltipHost, bounds);
         AbsoluteLayout.SetLayoutFlags(_tooltipHost, Microsoft.Maui.Layouts.AbsoluteLayoutFlags.None);
+        ((IView)_tooltipLayout).InvalidateMeasure();
+
+        var containerBounds = GetContainerBounds();
+        if (containerBounds.Width > 0 && containerBounds.Height > 0)
+        {
+            ((IView)_tooltipLayout).Measure(containerBounds.Width, containerBounds.Height);
+            ((IView)_tooltipLayout).Arrange(containerBounds);
+        }
     }
 
     private async Task AnimateSpotlightAndTooltipAsync(
@@ -254,7 +294,15 @@ public sealed class CoachMarkOverlayView : Grid
 
         try
         {
-            await tcs.Task.ConfigureAwait(true);
+            await Task.WhenAny(tcs.Task, Task.Delay(duration + TimeSpan.FromMilliseconds(250), cancellationToken)).ConfigureAwait(true);
+            if (!tcs.Task.IsCompleted)
+            {
+                this.AbortAnimation("SpotlightTransition");
+                _currentSpotlightRect = targetSpotlightRect;
+                _drawable.SpotlightRect = new RectF((float)targetSpotlightRect.X, (float)targetSpotlightRect.Y, (float)targetSpotlightRect.Width, (float)targetSpotlightRect.Height);
+                _graphicsView.Invalidate();
+            }
+
             PositionTooltip(targetTooltipBounds);
             await _tooltipHost.FadeToAsync(1.0, (uint)(duration.TotalMilliseconds / 2.0), Easing.Linear);
         }

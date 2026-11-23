@@ -8,6 +8,19 @@ public sealed class CoachMarkStep
     private readonly WeakReference<VisualElement>? _targetWeakRef;
     private readonly Func<VisualElement?>? _targetAccessor;
     private readonly Func<Task<VisualElement?>>? _asyncTargetAccessor;
+    private readonly Rect? _staticRect;
+    private readonly Func<Rect?>? _rectAccessor;
+    private readonly Func<Task<Rect?>>? _asyncRectAccessor;
+
+    /// <summary>
+    /// Gets the target resolution kind for this step.
+    /// </summary>
+    public CoachMarkTargetKind TargetKind { get; }
+
+    /// <summary>
+    /// Gets the Shell chrome target descriptor when <see cref="TargetKind"/> is <see cref="CoachMarkTargetKind.ShellElement"/>.
+    /// </summary>
+    public ShellTarget? ShellTarget { get; }
 
     /// <summary>
     /// Gets the title of the step.
@@ -92,6 +105,7 @@ public sealed class CoachMarkStep
     public CoachMarkStep(VisualElement target, string title, string description)
     {
         ArgumentNullException.ThrowIfNull(target);
+        TargetKind = CoachMarkTargetKind.VisualElement;
         _targetWeakRef = new WeakReference<VisualElement>(target);
         Title = title ?? string.Empty;
         Description = description ?? string.Empty;
@@ -102,6 +116,7 @@ public sealed class CoachMarkStep
     /// </summary>
     public CoachMarkStep(Func<VisualElement?> targetAccessor, string title, string description)
     {
+        TargetKind = CoachMarkTargetKind.VisualElement;
         _targetAccessor = targetAccessor ?? throw new ArgumentNullException(nameof(targetAccessor));
         Title = title ?? string.Empty;
         Description = description ?? string.Empty;
@@ -112,7 +127,91 @@ public sealed class CoachMarkStep
     /// </summary>
     public CoachMarkStep(Func<Task<VisualElement?>> asyncTargetAccessor, string title, string description)
     {
+        TargetKind = CoachMarkTargetKind.VisualElement;
         _asyncTargetAccessor = asyncTargetAccessor ?? throw new ArgumentNullException(nameof(asyncTargetAccessor));
+        Title = title ?? string.Empty;
+        Description = description ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Creates a new coach mark step referencing an absolute rectangle in the overlay coordinate space.
+    /// </summary>
+    public CoachMarkStep(Rect targetRect, string title, string description)
+    {
+        TargetKind = CoachMarkTargetKind.AbsoluteRect;
+        _staticRect = targetRect;
+        Title = title ?? string.Empty;
+        Description = description ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Creates a new coach mark step referencing a dynamically resolved absolute rectangle in the overlay coordinate space.
+    /// </summary>
+    public CoachMarkStep(Func<Rect?> rectAccessor, string title, string description)
+    {
+        TargetKind = CoachMarkTargetKind.AbsoluteRect;
+        _rectAccessor = rectAccessor ?? throw new ArgumentNullException(nameof(rectAccessor));
+        Title = title ?? string.Empty;
+        Description = description ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Creates a new coach mark step referencing an asynchronously resolved absolute rectangle in the overlay coordinate space.
+    /// </summary>
+    public CoachMarkStep(Func<Task<Rect?>> asyncRectAccessor, string title, string description)
+    {
+        TargetKind = CoachMarkTargetKind.AbsoluteRect;
+        _asyncRectAccessor = asyncRectAccessor ?? throw new ArgumentNullException(nameof(asyncRectAccessor));
+        Title = title ?? string.Empty;
+        Description = description ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Creates a new coach mark step referencing a rectangle relative to a VisualElement (such as a GraphicsView drawable region).
+    /// </summary>
+    public CoachMarkStep(VisualElement relativeTo, Rect targetRect, string title, string description)
+    {
+        ArgumentNullException.ThrowIfNull(relativeTo);
+        TargetKind = CoachMarkTargetKind.RelativeRect;
+        _targetWeakRef = new WeakReference<VisualElement>(relativeTo);
+        _staticRect = targetRect;
+        Title = title ?? string.Empty;
+        Description = description ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Creates a new coach mark step referencing a dynamically resolved rectangle relative to a VisualElement.
+    /// </summary>
+    public CoachMarkStep(VisualElement relativeTo, Func<Rect?> rectAccessor, string title, string description)
+    {
+        ArgumentNullException.ThrowIfNull(relativeTo);
+        _rectAccessor = rectAccessor ?? throw new ArgumentNullException(nameof(rectAccessor));
+        TargetKind = CoachMarkTargetKind.RelativeRect;
+        _targetWeakRef = new WeakReference<VisualElement>(relativeTo);
+        Title = title ?? string.Empty;
+        Description = description ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Creates a new coach mark step referencing an asynchronously resolved rectangle relative to a VisualElement.
+    /// </summary>
+    public CoachMarkStep(VisualElement relativeTo, Func<Task<Rect?>> asyncRectAccessor, string title, string description)
+    {
+        ArgumentNullException.ThrowIfNull(relativeTo);
+        _asyncRectAccessor = asyncRectAccessor ?? throw new ArgumentNullException(nameof(asyncRectAccessor));
+        TargetKind = CoachMarkTargetKind.RelativeRect;
+        _targetWeakRef = new WeakReference<VisualElement>(relativeTo);
+        Title = title ?? string.Empty;
+        Description = description ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Creates a new coach mark step referencing a native Shell chrome element (such as the flyout icon or a tab bar item).
+    /// </summary>
+    public CoachMarkStep(ShellTarget shellTarget, string title, string description)
+    {
+        ShellTarget = shellTarget ?? throw new ArgumentNullException(nameof(shellTarget));
+        TargetKind = CoachMarkTargetKind.ShellElement;
         Title = title ?? string.Empty;
         Description = description ?? string.Empty;
     }
@@ -138,5 +237,43 @@ public sealed class CoachMarkStep
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Resolves the current target rectangle safely. Returns null if unresolved or if dimensions are non-positive or non-finite.
+    /// </summary>
+    public async Task<Rect?> ResolveTargetRectAsync()
+    {
+        Rect? rect = null;
+
+        if (_asyncRectAccessor != null)
+        {
+            rect = await _asyncRectAccessor().ConfigureAwait(false);
+        }
+        else if (_rectAccessor != null)
+        {
+            rect = _rectAccessor();
+        }
+        else if (_staticRect.HasValue)
+        {
+            rect = _staticRect.Value;
+        }
+
+        if (!rect.HasValue || !IsValidRect(rect.Value))
+        {
+            return null;
+        }
+
+        return rect.Value;
+    }
+
+    private static bool IsValidRect(Rect rect)
+    {
+        return double.IsFinite(rect.X) &&
+               double.IsFinite(rect.Y) &&
+               double.IsFinite(rect.Width) &&
+               double.IsFinite(rect.Height) &&
+               rect.Width > 0 &&
+               rect.Height > 0;
     }
 }

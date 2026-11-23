@@ -27,6 +27,8 @@
 - 🔄 **Real-Time Visual Tree & Scroll Tracking**: Dynamically tracks element position mutations, translation changes, window resizing, and ancestor `ScrollView` scroll offsets without polling threads or memory leaks.
 - 📜 **Auto-Scrolling Support**: Automatically scrolls ancestor `ScrollView` containers to bring off-screen target elements smoothly into the viewport before presenting a step.
 - ⚡ **Dynamic & Asynchronous Target Binding**: Supports static `VisualElement` references, lazy synchronous factories (`Func<VisualElement?>`), and asynchronous accessors (`Func<Task<VisualElement?>>`) for virtualized items (such as inside a `CollectionView`).
+- 🧭 **Shell Chrome Targeting**: Highlight native `Shell` flyout (hamburger) icons and tab bar items (`ShellTarget.FlyoutIcon()`, `ShellTarget.Tab(...)`) using automatic Window-level overlay hosting across Android, iOS, Mac Catalyst, and Windows.
+- 📐 **Custom `Rect` & Drawable Canvas Targets**: Target arbitrary `Rect` regions—either relative to a host `VisualElement` (such as `GraphicsView` / `IDrawable` shapes) or in absolute overlay coordinates—with static, synchronous, or async accessors.
 - 🎨 **Custom XAML Templating**: Fully customize tooltip cards using custom `DataTemplate` and custom `BindingContext` definitions.
 - ♿ **Accessibility Built-In**: Integrates with .NET MAUI `SemanticScreenReader` to automatically announce step titles, descriptions, and progress indicators to assistive technologies.
 - 🛡️ **Memory Safe & Robust**: Uses weak references throughout visual tree tracking, guarantees complete visual tree cleanup upon page dismissal or navigation, and synchronizes transitions with mutex locking.
@@ -188,6 +190,7 @@ Customize global defaults or individual tour behaviors:
 | `AnimationEasing` | `Easing` | `Easing.CubicInOut` | Easing function applied to spotlight movements. |
 | `EnableAnimations` | `bool` | `true` | When `false`, spotlight and tooltip snap immediately without animation. |
 | `PreferredPlacement` | `CoachMarkPlacement`| `Auto` | Default card orientation (`Auto`, `Top`, `Bottom`, `Left`, `Right`, `Center`). |
+| `OverlayHostMode` | `CoachMarkOverlayHostMode` | `Auto` | Overlay attachment mode (`Auto`, `Page`, `Window`). `Auto` uses Window hosting when any step targets a `ShellTarget`, otherwise Page hosting. |
 | `AllowTargetInteraction` | `bool` | `false` | When `true`, touches within the spotlight pass to the underlying control. |
 | `DismissOnOutsideTap` | `bool` | `false` | When `true`, tapping outside the spotlight dismisses the active tour. |
 | `AdvanceOnTargetTap` | `bool` | `false` | When `true`, tapping inside the spotlight advances to the next step. |
@@ -291,6 +294,106 @@ if (result.IsCanceled)
 }
 ```
 
+### 4. Shell Flyout (Hamburger), Sidebar Items & Tab Bar Icons
+
+Target native `Shell` navigation bar, open sidebar (`FlyoutItem`), and tab bar items with `ShellTarget`. By default, `CoachMarkOverlayHostMode.Auto` automatically promotes the tour to Window-level overlay hosting whenever any step targets a `ShellTarget`:
+
+> **Tip:** When combining a `Shell` flyout menu with a bottom/top tab bar in `AppShell.xaml`, set `FlyoutDisplayOptions="AsSingleItem"` on your `FlyoutItem` so MAUI renders both the hamburger toggle button and the `TabBar`.
+
+```csharp
+var steps = new List<CoachMarkStep>
+{
+    new CoachMarkStep(
+        shellTarget: ShellTarget.FlyoutIcon(),
+        title: "Navigation Menu",
+        description: "Tap the hamburger icon to open the Shell flyout drawer.")
+    {
+        Placement = CoachMarkPlacement.Bottom,
+        Shape = SpotlightShape.Circle
+    },
+    new CoachMarkStep(
+        shellTarget: ShellTarget.FlyoutItem("About"),
+        title: "Sidebar Item",
+        description: "Open the sidebar in BeforeShowAsync to spotlight items inside the drawer.")
+    {
+        Placement = CoachMarkPlacement.Right,
+        Shape = SpotlightShape.RoundedRectangle,
+        BeforeShowAsync = async () =>
+        {
+            if (Shell.Current is { FlyoutIsPresented: false } shell)
+            {
+                shell.FlyoutIsPresented = true;
+                await Task.Delay(300); // Wait for drawer slide-in animation
+            }
+            return true;
+        },
+        AfterDismissAsync = async () =>
+        {
+            if (Shell.Current is { FlyoutIsPresented: true } shell)
+            {
+                shell.FlyoutIsPresented = false;
+                await Task.Delay(250);
+            }
+        }
+    },
+    new CoachMarkStep(
+        shellTarget: ShellTarget.Tab(0),
+        title: "Home Tab",
+        description: "Targets the first tab bar item by zero-based index.")
+    {
+        Placement = CoachMarkPlacement.Auto,
+        Shape = SpotlightShape.RoundedRectangle
+    },
+    new CoachMarkStep(
+        shellTarget: ShellTarget.Tab("Details"),
+        title: "Details Tab",
+        description: "Targets a tab bar item by title or route.")
+    {
+        Placement = CoachMarkPlacement.Auto,
+        Shape = SpotlightShape.RoundedRectangle
+    }
+};
+
+var options = new CoachMarkOptions
+{
+    OverlayHostMode = CoachMarkOverlayHostMode.Auto
+};
+
+await _coachMarkService.ShowAsync(steps, options);
+```
+
+### 5. Custom `Rect` & `GraphicsView` / `IDrawable` Regions
+
+Highlight specific drawn regions inside a `GraphicsView` (relative to the host `VisualElement`, tracking scroll and resize automatically) or specify an absolute `Rect` in the overlay coordinate space:
+
+```csharp
+var steps = new List<CoachMarkStep>
+{
+    // Relative Rect inside a GraphicsView / IDrawable (static, Func<Rect?>, or Func<Task<Rect?>>)
+    new CoachMarkStep(
+        relativeTo: DemoGraphicsView,
+        rectAccessor: () => _demoDrawable.PrimaryNodeRect,
+        title: "Chart Peak",
+        description: "Highlights a specific Rect drawn inside a GraphicsView IDrawable.")
+    {
+        Placement = CoachMarkPlacement.Top,
+        Shape = SpotlightShape.RoundedRectangle,
+        SpotlightCornerRadius = 10f
+    },
+
+    // Absolute Rect in overlay coordinates (static, Func<Rect?>, or Func<Task<Rect?>>)
+    new CoachMarkStep(
+        targetRect: new Rect(24, 48, 120, 60),
+        title: "Custom Region",
+        description: "Highlights a fixed rectangle in the overlay coordinate space.")
+    {
+        Shape = SpotlightShape.Rectangle
+    }
+};
+
+await _coachMarkService.ShowAsync(steps);
+```
+
 ---
 
 ## 🏛️ Architecture
@@ -302,9 +405,11 @@ graph TD
     
     subgraph Core Engine
         CMC -->|Coordinate Accumulation| VTR[VisualTreeCoordinateResolver]
+        CMC -->|Shell Chrome Resolution| STR[PlatformShellTargetResolver]
         CMC -->|Deterministic Placement| TPE[TooltipPlacementEngine]
         CMC -->|Throttled Layout/Scroll Listener| ET[ElementTracker]
-        CMC -->|Overlay Hosting & Lifecycle| OVV[CoachMarkOverlayView]
+        CMC -->|Page & Window Attachment| OH[PlatformOverlayHost]
+        OH -->|Hosts Overlay| OVV[CoachMarkOverlayView]
     end
     
     subgraph Rendering & UI
@@ -340,5 +445,8 @@ A full-featured showcase app is available in the [`samples/CoachMarkSample`](sam
 - Single-step highlights
 - `CancellationToken` timeouts
 - Page navigation dismissal safety
+- Shell flyout (hamburger) icon & open sidebar item targeting (`ShellTarget.FlyoutIcon`, `ShellTarget.FlyoutItem`)
+- Shell tab bar icon targeting (`ShellTarget.Tab`)
+- Custom `Rect` targeting inside a `GraphicsView` / `IDrawable` canvas
 
 ---

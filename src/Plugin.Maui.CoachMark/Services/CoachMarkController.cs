@@ -10,17 +10,18 @@ public sealed class CoachMarkController : IDisposable
     private readonly ICoordinateResolver _coordinateResolver;
     private readonly ITooltipPlacementEngine _placementEngine;
     private readonly IElementTracker _elementTracker;
+    private readonly IShellTargetResolver _shellTargetResolver;
+    private readonly IOverlayHost _overlayHost;
     private readonly SemaphoreSlim _transitionLock = new(1, 1);
 
     private CoachMarkOverlayView? _overlayView;
     private WeakReference<ContentPage>? _hostPageWeakRef;
-    private View? _originalPageContent;
-    private Grid? _wrapperGrid;
-    private bool _didWrapPageContent;
+    private WeakReference<Window>? _hostWindowWeakRef;
 
     private IReadOnlyList<CoachMarkStep>? _currentSteps;
     private CoachMarkOptions? _currentOptions;
     private int _currentStepIndex = -1;
+    private int _disappearedNotifiedStepIndex = -1;
     private CoachMarkState _state = CoachMarkState.Idle;
     private TaskCompletionSource<CoachMarkResult>? _tourCompletionSource;
     private CancellationTokenRegistration _cancellationRegistration;
@@ -28,17 +29,22 @@ public sealed class CoachMarkController : IDisposable
 
     public bool IsActive => _state is CoachMarkState.Showing or CoachMarkState.Transitioning;
     public int CurrentStepIndex => _currentStepIndex;
+    internal Func<ContentPage?>? ActivePageResolver { get; init; }
 
     public CoachMarkController(
         IDispatcher dispatcher,
         ICoordinateResolver? coordinateResolver = null,
         ITooltipPlacementEngine? placementEngine = null,
-        IElementTracker? elementTracker = null)
+        IElementTracker? elementTracker = null,
+        IShellTargetResolver? shellTargetResolver = null,
+        IOverlayHost? overlayHost = null)
     {
         _dispatcher = dispatcher ?? throw new ArgumentNullException(nameof(dispatcher));
         _coordinateResolver = coordinateResolver ?? new VisualTreeCoordinateResolver();
         _placementEngine = placementEngine ?? new TooltipPlacementEngine();
         _elementTracker = elementTracker ?? new ElementTracker(dispatcher);
+        _shellTargetResolver = shellTargetResolver ?? new PlatformShellTargetResolver();
+        _overlayHost = overlayHost ?? new PlatformOverlayHost();
         _elementTracker.TargetLayoutChanged += OnTargetLayoutChanged;
     }
 
@@ -67,6 +73,7 @@ public sealed class CoachMarkController : IDisposable
                 _currentSteps = steps;
                 _currentOptions = options ?? new CoachMarkOptions();
                 _currentStepIndex = -1;
+                _disappearedNotifiedStepIndex = -1;
                 _state = CoachMarkState.Transitioning;
                 _tourCompletionSource = new TaskCompletionSource<CoachMarkResult>();
 
@@ -85,10 +92,13 @@ public sealed class CoachMarkController : IDisposable
                     return new CoachMarkResult(CoachMarkDismissReason.TargetDetached, -1, steps.Count);
                 }
 
-                bool stepSuccess = await InternalGoToStepAsync(0, cancellationToken).ConfigureAwait(true);
+                bool stepSuccess = await TryAdvanceFromAsync(0, 1, cancellationToken).ConfigureAwait(true);
                 if (!stepSuccess)
                 {
-                    await InternalDismissAsync(CoachMarkDismissReason.TargetDetached).ConfigureAwait(true);
+                    var reason = cancellationToken.IsCancellationRequested
+                        ? CoachMarkDismissReason.Canceled
+                        : CoachMarkDismissReason.TargetDetached;
+                    await InternalDismissAsync(reason).ConfigureAwait(true);
                 }
             }
             catch (OperationCanceledException)
@@ -122,18 +132,20 @@ public sealed class CoachMarkController : IDisposable
                 return;
             }
 
-            int nextIndex = _currentStepIndex + 1;
-            if (nextIndex >= _currentSteps.Count)
+            await NotifyStepDisappearingAsync(_currentStepIndex).ConfigureAwait(true);
+
+            bool moved = await TryAdvanceFromAsync(_currentStepIndex + 1, 1, CancellationToken.None).ConfigureAwait(true);
+            if (!moved)
             {
                 await InternalDismissAsync(CoachMarkDismissReason.Completed).ConfigureAwait(true);
-            }
-            else
-            {
-                await InternalGoToStepAsync(nextIndex, CancellationToken.None).ConfigureAwait(true);
             }
         }
         finally
         {
+            if (_state == CoachMarkState.Transitioning)
+            {
+                _state = CoachMarkState.Showing;
+            }
             _transitionLock.Release();
         }
     });
@@ -148,10 +160,20 @@ public sealed class CoachMarkController : IDisposable
                 return;
             }
 
-            await InternalGoToStepAsync(_currentStepIndex - 1, CancellationToken.None).ConfigureAwait(true);
+            await NotifyStepDisappearingAsync(_currentStepIndex).ConfigureAwait(true);
+
+            bool moved = await TryAdvanceFromAsync(_currentStepIndex - 1, -1, CancellationToken.None).ConfigureAwait(true);
+            if (!moved && _state == CoachMarkState.Transitioning)
+            {
+                _state = CoachMarkState.Showing;
+            }
         }
         finally
         {
+            if (_state == CoachMarkState.Transitioning)
+            {
+                _state = CoachMarkState.Showing;
+            }
             _transitionLock.Release();
         }
     });
@@ -192,27 +214,28 @@ public sealed class CoachMarkController : IDisposable
             }
         }
 
-        var targetElement = await step.ResolveTargetAsync().ConfigureAwait(true);
-        if (targetElement == null)
+        if (_overlayHost.IsWindowHosted && (_overlayView.Width <= 0 || _overlayView.Height <= 0))
         {
-            return false;
+            await WaitForOverlayLayoutAsync(_overlayView, TimeSpan.FromMilliseconds(100)).ConfigureAwait(true);
         }
 
-        if (options.ScrollToTargetIfNeeded)
-        {
-            await ScrollToElementIfNeededAsync(targetElement).ConfigureAwait(true);
-        }
+        var targetBoundsNullable = await ResolveStepBoundsAsync(
+            step,
+            options,
+            GetActiveWindow(),
+            _overlayView,
+            allowScroll: true,
+            updateTracking: true).ConfigureAwait(true);
 
-        var targetBoundsNullable = _coordinateResolver.GetBoundingBox(targetElement, _overlayView);
         if (!targetBoundsNullable.HasValue)
         {
             return false;
         }
 
         var targetBounds = targetBoundsNullable.Value;
-        _elementTracker.Track(targetElement);
 
         _currentStepIndex = targetIndex;
+        _disappearedNotifiedStepIndex = -1;
         options.OnStepAppearing?.Invoke(step, targetIndex);
 
         await _overlayView.TransitionToStepAsync(
@@ -226,6 +249,62 @@ public sealed class CoachMarkController : IDisposable
 
         _state = CoachMarkState.Showing;
         return true;
+    }
+
+    internal async Task<bool> TryAdvanceFromAsync(int startIndex, int direction, CancellationToken cancellationToken)
+    {
+        if (_currentSteps == null)
+        {
+            return false;
+        }
+
+        for (int index = startIndex; index >= 0 && index < _currentSteps.Count; index += direction)
+        {
+            if (cancellationToken.IsCancellationRequested)
+            {
+                return false;
+            }
+
+            if (await InternalGoToStepAsync(index, cancellationToken).ConfigureAwait(true))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static async Task WaitForOverlayLayoutAsync(CoachMarkOverlayView overlayView, TimeSpan timeout)
+    {
+        if (overlayView.Width > 0 && overlayView.Height > 0)
+        {
+            return;
+        }
+
+        var layoutReadyTcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        void OnSizeChanged(object? sender, EventArgs e)
+        {
+            if (overlayView.Width > 0 && overlayView.Height > 0)
+            {
+                layoutReadyTcs.TrySetResult(true);
+            }
+        }
+
+        overlayView.SizeChanged += OnSizeChanged;
+        try
+        {
+            if (overlayView.Width > 0 && overlayView.Height > 0)
+            {
+                return;
+            }
+
+            await Task.WhenAny(layoutReadyTcs.Task, Task.Delay(timeout)).ConfigureAwait(true);
+        }
+        finally
+        {
+            overlayView.SizeChanged -= OnSizeChanged;
+        }
     }
 
     private async Task InternalDismissAsync(CoachMarkDismissReason reason)
@@ -242,91 +321,226 @@ public sealed class CoachMarkController : IDisposable
         int lastIndex = _currentStepIndex;
         int total = _currentSteps?.Count ?? 0;
 
-        if (_currentSteps != null && lastIndex >= 0 && lastIndex < _currentSteps.Count)
-        {
-            var step = _currentSteps[lastIndex];
-            _currentOptions?.OnStepDisappeared?.Invoke(step, lastIndex);
-            if (step.AfterDismissAsync != null)
-            {
-                try
-                {
-                    await step.AfterDismissAsync().ConfigureAwait(true);
-                }
-                catch
-                {
-                    // Cleanly suppress hook errors on shutdown
-                }
-            }
-        }
+        await NotifyStepDisappearingAsync(lastIndex).ConfigureAwait(true);
 
         await DetachOverlayFromPageAsync().ConfigureAwait(true);
 
         _currentSteps = null;
         _currentStepIndex = -1;
+        _disappearedNotifiedStepIndex = -1;
         _state = CoachMarkState.Idle;
 
         _tourCompletionSource?.TrySetResult(new CoachMarkResult(reason, lastIndex, total));
     }
 
+    private async Task NotifyStepDisappearingAsync(int stepIndex)
+    {
+        if (_currentSteps == null || stepIndex < 0 || stepIndex >= _currentSteps.Count || _disappearedNotifiedStepIndex == stepIndex)
+        {
+            return;
+        }
+
+        _disappearedNotifiedStepIndex = stepIndex;
+        var step = _currentSteps[stepIndex];
+        _currentOptions?.OnStepDisappeared?.Invoke(step, stepIndex);
+        if (step.AfterDismissAsync != null)
+        {
+            try
+            {
+                await step.AfterDismissAsync().ConfigureAwait(true);
+            }
+            catch
+            {
+                // Cleanly suppress hook errors on step transition or shutdown
+            }
+        }
+    }
+
+    internal static CoachMarkOverlayHostMode ResolveEffectiveHostMode(
+        IReadOnlyList<CoachMarkStep> steps,
+        CoachMarkOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(steps);
+        ArgumentNullException.ThrowIfNull(options);
+
+        if (options.OverlayHostMode != CoachMarkOverlayHostMode.Auto)
+        {
+            return options.OverlayHostMode;
+        }
+
+        for (int i = 0; i < steps.Count; i++)
+        {
+            if (steps[i].TargetKind == CoachMarkTargetKind.ShellElement)
+            {
+                return CoachMarkOverlayHostMode.Window;
+            }
+        }
+
+        return CoachMarkOverlayHostMode.Page;
+    }
+
+    internal async Task<Rect?> ResolveStepBoundsAsync(
+        CoachMarkStep step,
+        CoachMarkOptions options,
+        Window? activeWindow,
+        VisualElement? relativeTo,
+        bool allowScroll,
+        bool updateTracking = true)
+    {
+        ArgumentNullException.ThrowIfNull(step);
+        ArgumentNullException.ThrowIfNull(options);
+
+        switch (step.TargetKind)
+        {
+            case CoachMarkTargetKind.VisualElement:
+            {
+                var targetElement = await step.ResolveTargetAsync().ConfigureAwait(true);
+                if (targetElement == null)
+                {
+                    return null;
+                }
+
+                if (allowScroll && options.ScrollToTargetIfNeeded)
+                {
+                    await ScrollToElementIfNeededAsync(targetElement).ConfigureAwait(true);
+                }
+
+                var bounds = _coordinateResolver.GetBoundingBox(targetElement, relativeTo);
+                if (!bounds.HasValue)
+                {
+                    return null;
+                }
+
+                if (updateTracking)
+                {
+                    _elementTracker.Track(targetElement);
+                }
+
+                return bounds.Value;
+            }
+
+            case CoachMarkTargetKind.RelativeRect:
+            {
+                var anchorElement = await step.ResolveTargetAsync().ConfigureAwait(true);
+                if (anchorElement == null)
+                {
+                    return null;
+                }
+
+                if (allowScroll && options.ScrollToTargetIfNeeded)
+                {
+                    await ScrollToElementIfNeededAsync(anchorElement).ConfigureAwait(true);
+                }
+
+                var anchorBounds = _coordinateResolver.GetBoundingBox(anchorElement, relativeTo);
+                var localRect = await step.ResolveTargetRectAsync().ConfigureAwait(true);
+                if (!anchorBounds.HasValue || !localRect.HasValue)
+                {
+                    return null;
+                }
+
+                if (updateTracking)
+                {
+                    _elementTracker.Track(anchorElement);
+                }
+
+                return new Rect(
+                    anchorBounds.Value.X + localRect.Value.X,
+                    anchorBounds.Value.Y + localRect.Value.Y,
+                    localRect.Value.Width,
+                    localRect.Value.Height);
+            }
+
+            case CoachMarkTargetKind.AbsoluteRect:
+            {
+                if (updateTracking)
+                {
+                    _elementTracker.Stop();
+                }
+
+                return await step.ResolveTargetRectAsync().ConfigureAwait(true);
+            }
+
+            case CoachMarkTargetKind.ShellElement:
+            {
+                if (updateTracking)
+                {
+                    _elementTracker.Stop();
+                }
+
+                if (step.ShellTarget == null)
+                {
+                    return null;
+                }
+
+                return _shellTargetResolver.GetBoundingBox(step.ShellTarget, activeWindow, relativeTo);
+            }
+
+            default:
+                return null;
+        }
+    }
+
     private async Task<bool> AttachOverlayToCurrentPageAsync()
     {
-        var page = GetActiveContentPage();
+        var page = ActivePageResolver?.Invoke() ?? GetActiveContentPage();
         if (page == null)
         {
             return false;
         }
 
+        var options = _currentOptions ?? new CoachMarkOptions();
+        var window = page.Window ?? Application.Current?.Windows.FirstOrDefault();
+
         _hostPageWeakRef = new WeakReference<ContentPage>(page);
+        _hostWindowWeakRef = window != null ? new WeakReference<Window>(window) : null;
         page.Disappearing += OnPageDisappearing;
         page.Unloaded += OnPageUnloaded;
 
         _overlayView = new CoachMarkOverlayView();
-        _overlayView.ApplyOptions(_currentOptions ?? new CoachMarkOptions());
+        _overlayView.ApplyOptions(options);
 
         _overlayView.NextRequested += OnOverlayNextRequested;
         _overlayView.PreviousRequested += OnOverlayPreviousRequested;
         _overlayView.SkipRequested += OnOverlaySkipRequested;
         _overlayView.OutsideTapped += OnOverlayOutsideTapped;
         _overlayView.SpotlightTapped += OnOverlaySpotlightTapped;
+        _overlayView.SizeChanged += OnOverlaySizeChanged;
 
-        if (page.Content is Grid pageGrid)
+        var mode = ResolveEffectiveHostMode(_currentSteps ?? Array.Empty<CoachMarkStep>(), options);
+        bool attached = await _overlayHost.AttachAsync(_overlayView, page, window, mode).ConfigureAwait(true);
+        if (!attached)
         {
-            _didWrapPageContent = false;
-            if (pageGrid.RowDefinitions.Count > 0)
-            {
-                Grid.SetRowSpan(_overlayView, pageGrid.RowDefinitions.Count);
-            }
-            if (pageGrid.ColumnDefinitions.Count > 0)
-            {
-                Grid.SetColumnSpan(_overlayView, pageGrid.ColumnDefinitions.Count);
-            }
-            pageGrid.Children.Add(_overlayView);
-        }
-        else
-        {
-            _didWrapPageContent = true;
-            _originalPageContent = page.Content;
-
-            _wrapperGrid = new Grid
-            {
-                HorizontalOptions = LayoutOptions.Fill,
-                VerticalOptions = LayoutOptions.Fill
-            };
-
-            if (_originalPageContent != null)
-            {
-                page.Content = null;
-                _wrapperGrid.Children.Add(_originalPageContent);
-            }
-
-            _wrapperGrid.Children.Add(_overlayView);
-            page.Content = _wrapperGrid;
+            UnsubscribeOverlayEvents();
+            page.Disappearing -= OnPageDisappearing;
+            page.Unloaded -= OnPageUnloaded;
+            _overlayView = null;
+            _hostPageWeakRef = null;
+            _hostWindowWeakRef = null;
+            return false;
         }
 
         return true;
     }
 
-    private Task DetachOverlayFromPageAsync()
+    private async Task DetachOverlayFromPageAsync()
+    {
+        UnsubscribeOverlayEvents();
+
+        if (_hostPageWeakRef != null && _hostPageWeakRef.TryGetTarget(out var page))
+        {
+            page.Disappearing -= OnPageDisappearing;
+            page.Unloaded -= OnPageUnloaded;
+        }
+
+        await _overlayHost.DetachAsync().ConfigureAwait(true);
+
+        _overlayView = null;
+        _hostPageWeakRef = null;
+        _hostWindowWeakRef = null;
+    }
+
+    private void UnsubscribeOverlayEvents()
     {
         if (_overlayView != null)
         {
@@ -335,33 +549,18 @@ public sealed class CoachMarkController : IDisposable
             _overlayView.SkipRequested -= OnOverlaySkipRequested;
             _overlayView.OutsideTapped -= OnOverlayOutsideTapped;
             _overlayView.SpotlightTapped -= OnOverlaySpotlightTapped;
+            _overlayView.SizeChanged -= OnOverlaySizeChanged;
         }
+    }
 
-        if (_hostPageWeakRef != null && _hostPageWeakRef.TryGetTarget(out var page))
+    private Window? GetActiveWindow()
+    {
+        if (_hostWindowWeakRef != null && _hostWindowWeakRef.TryGetTarget(out var window))
         {
-            page.Disappearing -= OnPageDisappearing;
-            page.Unloaded -= OnPageUnloaded;
-
-            if (_didWrapPageContent)
-            {
-                if (_wrapperGrid != null)
-                {
-                    _wrapperGrid.Children.Clear();
-                    _wrapperGrid = null;
-                }
-                page.Content = _originalPageContent;
-                _originalPageContent = null;
-                _didWrapPageContent = false;
-            }
-            else if (page.Content is Grid pageGrid && _overlayView != null)
-            {
-                pageGrid.Children.Remove(_overlayView);
-            }
+            return window;
         }
 
-        _overlayView = null;
-        _hostPageWeakRef = null;
-        return Task.CompletedTask;
+        return Application.Current?.Windows.FirstOrDefault();
     }
 
     private void OnOverlayNextRequested(object? sender, EventArgs e) => _ = NextAsync();
@@ -410,26 +609,35 @@ public sealed class CoachMarkController : IDisposable
 
     private void OnTargetLayoutChanged(object? sender, EventArgs e)
     {
-        _ = RunOnMainThreadAsync(async () =>
+        _ = RunOnMainThreadAsync(RefreshCurrentStepPositionAsync);
+    }
+
+    private void OnOverlaySizeChanged(object? sender, EventArgs e)
+    {
+        _ = RunOnMainThreadAsync(RefreshCurrentStepPositionAsync);
+    }
+
+    private async Task RefreshCurrentStepPositionAsync()
+    {
+        if (!IsActive || _overlayView == null || _currentSteps == null || _currentOptions == null ||
+            _currentStepIndex < 0 || _currentStepIndex >= _currentSteps.Count)
         {
-            if (!IsActive || _overlayView == null || _currentSteps == null || _currentStepIndex < 0 || _currentStepIndex >= _currentSteps.Count)
-            {
-                return;
-            }
+            return;
+        }
 
-            var step = _currentSteps[_currentStepIndex];
-            var target = await step.ResolveTargetAsync().ConfigureAwait(true);
-            if (target == null || !target.IsVisible)
-            {
-                return;
-            }
+        var step = _currentSteps[_currentStepIndex];
+        var bounds = await ResolveStepBoundsAsync(
+            step,
+            _currentOptions,
+            GetActiveWindow(),
+            _overlayView,
+            allowScroll: false,
+            updateTracking: false).ConfigureAwait(true);
 
-            var bounds = _coordinateResolver.GetBoundingBox(target, _overlayView);
-            if (bounds.HasValue && _currentOptions != null)
-            {
-                _overlayView.UpdateTargetPosition(bounds.Value, _currentOptions, _placementEngine);
-            }
-        });
+        if (bounds.HasValue)
+        {
+            _overlayView.UpdateTargetPosition(bounds.Value, _currentOptions, _placementEngine);
+        }
     }
 
     private static async Task ScrollToElementIfNeededAsync(VisualElement target)
