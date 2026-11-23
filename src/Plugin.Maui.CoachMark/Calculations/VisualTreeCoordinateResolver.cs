@@ -40,7 +40,22 @@ public sealed class VisualTreeCoordinateResolver : ICoordinateResolver
                 }
                 catch
                 {
-                    // Fallback to MAUI visual tree walk if platform transform fails
+                    // When relativeTo is hosted in a WinUI Popup, TransformToVisual across visual roots fails;
+                    // retry relative to XamlRoot.Content before falling back to the MAUI visual tree walk.
+                    if (targetPlatformView.XamlRoot?.Content is Microsoft.UI.Xaml.UIElement xamlRootContent &&
+                        !ReferenceEquals(relativePlatformView, xamlRootContent))
+                    {
+                        try
+                        {
+                            var rootTransform = targetPlatformView.TransformToVisual(xamlRootContent);
+                            var point = rootTransform.TransformPoint(new Windows.Foundation.Point(0, 0));
+                            return new Rect(point.X, point.Y, targetPlatformView.ActualWidth, targetPlatformView.ActualHeight);
+                        }
+                        catch
+                        {
+                            // Fallback to MAUI visual tree walk
+                        }
+                    }
                 }
             }
         }

@@ -12,12 +12,15 @@ public sealed class SampleItem
 public partial class MainPage : ContentPage
 {
     private readonly ICoachMarkService _coachMarkService;
+    private readonly DemoCanvasDrawable _demoDrawable = new();
     public ObservableCollection<SampleItem> Items { get; } = new();
 
     public MainPage(ICoachMarkService coachMarkService)
     {
         InitializeComponent();
         _coachMarkService = coachMarkService ?? throw new ArgumentNullException(nameof(coachMarkService));
+
+        DemoGraphicsView.Drawable = _demoDrawable;
 
         // Populate sample data
         Items.Add(new SampleItem { Name = "Cloud Database Sync", Description = "Configures automated backup and syncing." });
@@ -157,6 +160,182 @@ public partial class MainPage : ContentPage
             };
 
             await _coachMarkService.ShowAsync(step);
+        }
+    }
+
+    private async void OnShellAndRectTourClicked(object? sender, EventArgs e)
+    {
+        StatusLabel.Text = "Shell & Drawable Rect Tour started...";
+
+        var steps = new List<CoachMarkStep>
+        {
+            new CoachMarkStep(
+                shellTarget: ShellTarget.FlyoutIcon(),
+                title: "Shell Flyout Menu",
+                description: "Targets the native Shell hamburger menu button with Window-level overlay hosting.")
+            {
+                Placement = CoachMarkPlacement.Bottom,
+                Shape = SpotlightShape.Circle,
+                BeforeShowAsync = async () =>
+                {
+                    if (Shell.Current is { FlyoutIsPresented: true } shell)
+                    {
+                        shell.FlyoutIsPresented = false;
+                        await Task.Delay(250);
+                    }
+                    return true;
+                }
+            },
+            new CoachMarkStep(
+                shellTarget: ShellTarget.FlyoutItem("Showcase"),
+                title: "Sidebar: Showcase",
+                description: "Opens the Shell sidebar drawer and highlights a navigation item inside it.")
+            {
+                Placement = CoachMarkPlacement.Right,
+                Shape = SpotlightShape.RoundedRectangle,
+                BeforeShowAsync = async () =>
+                {
+                    if (Shell.Current is { FlyoutIsPresented: false } shell)
+                    {
+                        shell.FlyoutIsPresented = true;
+                        await Task.Delay(300);
+                    }
+                    return true;
+                }
+            },
+            new CoachMarkStep(
+                shellTarget: ShellTarget.FlyoutItem("About"),
+                title: "Sidebar: About",
+                description: "Highlights another sidebar menu item inside the open flyout drawer.")
+            {
+                Placement = CoachMarkPlacement.Right,
+                Shape = SpotlightShape.RoundedRectangle,
+                BeforeShowAsync = async () =>
+                {
+                    if (Shell.Current is { FlyoutIsPresented: false } shell)
+                    {
+                        shell.FlyoutIsPresented = true;
+                        await Task.Delay(300);
+                    }
+                    return true;
+                },
+                AfterDismissAsync = async () =>
+                {
+                    if (Shell.Current is { FlyoutIsPresented: true } shell)
+                    {
+                        shell.FlyoutIsPresented = false;
+                        await Task.Delay(250);
+                    }
+                }
+            },
+            new CoachMarkStep(
+                shellTarget: ShellTarget.Tab(0),
+                title: "Home Tab Icon",
+                description: "Targets the first Shell tab bar icon by zero-based index.")
+            {
+                Placement = CoachMarkPlacement.Auto,
+                Shape = SpotlightShape.RoundedRectangle,
+                BeforeShowAsync = async () =>
+                {
+                    if (Shell.Current is { FlyoutIsPresented: true } shell)
+                    {
+                        shell.FlyoutIsPresented = false;
+                        await Task.Delay(250);
+                    }
+                    return true;
+                }
+            },
+            new CoachMarkStep(
+                shellTarget: ShellTarget.Tab("Details"),
+                title: "Details Tab Icon",
+                description: "Targets the Details tab bar icon by title or route.")
+            {
+                Placement = CoachMarkPlacement.Auto,
+                Shape = SpotlightShape.RoundedRectangle
+            },
+            new CoachMarkStep(
+                shellTarget: ShellTarget.Tab("Explore"),
+                title: "Explore Tab Icon",
+                description: "Targets the Explore tab bar icon by title or route.")
+            {
+                Placement = CoachMarkPlacement.Auto,
+                Shape = SpotlightShape.RoundedRectangle
+            },
+            new CoachMarkStep(
+                relativeTo: DemoGraphicsView,
+                rectAccessor: () => _demoDrawable.PrimaryNodeRect,
+                title: "Drawable Card Region",
+                description: "Targets a specific Rect drawn inside a GraphicsView IDrawable.")
+            {
+                Placement = CoachMarkPlacement.Top,
+                Shape = SpotlightShape.RoundedRectangle,
+                SpotlightCornerRadius = 10f
+            },
+            new CoachMarkStep(
+                relativeTo: DemoGraphicsView,
+                rectAccessor: () => _demoDrawable.SecondaryNodeRect,
+                title: "Drawable Badge Circle",
+                description: "Tracks a second dynamic drawable region inside the canvas.")
+            {
+                Placement = CoachMarkPlacement.Top,
+                Shape = SpotlightShape.Circle
+            }
+        };
+
+        var options = new CoachMarkOptions
+        {
+            OverlayHostMode = CoachMarkOverlayHostMode.Auto,
+            OverlayOpacity = 0.75f,
+            SpotlightBorderColor = Color.FromArgb("#818CF8"),
+            SpotlightBorderWidth = 2f
+        };
+
+        var result = await _coachMarkService.ShowAsync(steps, options);
+        if (Shell.Current is { FlyoutIsPresented: true } currentShell)
+        {
+            currentShell.FlyoutIsPresented = false;
+        }
+        StatusLabel.Text = $"Shell & Rect Tour finished. Reason: {result.Reason}, Steps: {result.LastStepIndex + 1}/{result.TotalSteps}";
+    }
+
+    private sealed class DemoCanvasDrawable : IDrawable
+    {
+        public Rect PrimaryNodeRect { get; private set; } = new(16, 20, 140, 100);
+        public Rect SecondaryNodeRect { get; private set; } = new(210, 32, 76, 76);
+
+        public void Draw(ICanvas canvas, RectF dirtyRect)
+        {
+            canvas.SaveState();
+
+            canvas.FillColor = Color.FromArgb("#F1F5F9");
+            canvas.FillRoundedRectangle(dirtyRect, 12);
+
+            float cardWidth = Math.Min(160f, Math.Max(100f, dirtyRect.Width * 0.45f));
+            var primary = new RectF(16f, 20f, cardWidth, Math.Max(48f, dirtyRect.Height - 40f));
+            PrimaryNodeRect = new Rect(primary.X, primary.Y, primary.Width, primary.Height);
+
+            canvas.FillColor = Color.FromArgb("#EEF2FF");
+            canvas.StrokeColor = Color.FromArgb("#4F46E5");
+            canvas.StrokeSize = 2f;
+            canvas.FillRoundedRectangle(primary, 10f);
+            canvas.DrawRoundedRectangle(primary, 10f);
+
+            canvas.FontColor = Color.FromArgb("#312E81");
+            canvas.FontSize = 13f;
+            canvas.DrawString("Drawable Rect #1", primary, HorizontalAlignment.Center, VerticalAlignment.Center);
+
+            float circleSize = 72f;
+            float circleX = Math.Max(primary.Right + 24f, dirtyRect.Width - circleSize - 24f);
+            float circleY = Math.Max(8f, (dirtyRect.Height - circleSize) / 2f);
+            var secondary = new RectF(circleX, circleY, circleSize, circleSize);
+            SecondaryNodeRect = new Rect(secondary.X, secondary.Y, secondary.Width, secondary.Height);
+
+            canvas.FillColor = Color.FromArgb("#0D9488");
+            canvas.FillEllipse(secondary);
+            canvas.FontColor = Colors.White;
+            canvas.DrawString("#2", secondary, HorizontalAlignment.Center, VerticalAlignment.Center);
+
+            canvas.RestoreState();
         }
     }
 }

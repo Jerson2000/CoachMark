@@ -14,6 +14,8 @@ public static class CoachMarkAppBuilderExtensions
 
         builder.Services.AddSingleton<ITooltipPlacementEngine, TooltipPlacementEngine>();
         builder.Services.AddSingleton<ICoordinateResolver, VisualTreeCoordinateResolver>();
+        builder.Services.AddSingleton<IShellTargetResolver, PlatformShellTargetResolver>();
+        builder.Services.AddTransient<IOverlayHost, PlatformOverlayHost>();
         builder.Services.AddTransient<IElementTracker>(sp =>
         {
             var dispatcher = sp.GetRequiredService<IDispatcher>();
@@ -26,8 +28,16 @@ public static class CoachMarkAppBuilderExtensions
             var coordinateResolver = sp.GetRequiredService<ICoordinateResolver>();
             var placementEngine = sp.GetRequiredService<ITooltipPlacementEngine>();
             var elementTracker = sp.GetRequiredService<IElementTracker>();
+            var shellTargetResolver = sp.GetRequiredService<IShellTargetResolver>();
+            var overlayHost = sp.GetRequiredService<IOverlayHost>();
 
-            var controller = new CoachMarkController(dispatcher, coordinateResolver, placementEngine, elementTracker);
+            var controller = new CoachMarkController(
+                dispatcher,
+                coordinateResolver,
+                placementEngine,
+                elementTracker,
+                shellTargetResolver,
+                overlayHost);
             return new CoachMarkService(controller);
         });
 

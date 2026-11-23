@@ -14,6 +14,7 @@ public class CoachMarkOptionsTests
         Assert.Equal(new Thickness(8), options.SpotlightPadding);
         Assert.Equal(SpotlightShape.RoundedRectangle, options.DefaultSpotlightShape);
         Assert.Equal(CoachMarkPlacement.Auto, options.PreferredPlacement);
+        Assert.Equal(CoachMarkOverlayHostMode.Auto, options.OverlayHostMode);
         Assert.False(options.AllowTargetInteraction);
         Assert.False(options.DismissOnOutsideTap);
         Assert.True(options.ShowStepIndicator);
